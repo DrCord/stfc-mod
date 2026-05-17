@@ -335,14 +335,16 @@ static std::shared_ptr<TargetWorker> get_curl_client_sync(const std::string& tar
   worker->session->SetTimeout(cpr::Timeout{10'000});
 #endif
 
+  spdlog::debug("sync target '{}': proxy='{}', verify_ssl={}", target, target_config.proxy, target_config.verify_ssl);
+
   if (!target_config.proxy.empty()) {
     worker->session->SetProxies({{"http", target_config.proxy}, {"https", target_config.proxy}});
+  }
 
-    if (!target_config.verify_ssl) {
-      worker->session->SetSslOptions(
-        cpr::Ssl(cpr::ssl::VerifyHost{false}, cpr::ssl::VerifyPeer{false}, cpr::ssl::NoRevoke{true})
-      );
-    }
+  if (!target_config.verify_ssl) {
+    worker->session->SetSslOptions(
+      cpr::Ssl(cpr::ssl::VerifyHost{false}, cpr::ssl::VerifyPeer{false}, cpr::ssl::NoRevoke{true})
+    );
   }
 
   worker->session->SetHeader({
@@ -408,14 +410,16 @@ static std::shared_ptr<cpr::Session> get_curl_client_scopely()
     session->SetAcceptEncoding(cpr::AcceptEncoding{});
     session->SetHttpVersion(cpr::HttpVersion{cpr::HttpVersionCode::VERSION_1_1});
 
+    spdlog::debug("scopely session: proxy='{}', verify_ssl={}", Config::Get().sync_options.proxy, Config::Get().sync_options.verify_ssl);
+
     if (!Config::Get().sync_options.proxy.empty()) {
       session->SetProxies({{"https", Config::Get().sync_options.proxy}});
+    }
 
-      if (!Config::Get().sync_options.verify_ssl) {
-        session->SetSslOptions(
-          cpr::Ssl(cpr::ssl::VerifyHost{false}, cpr::ssl::VerifyPeer{false}, cpr::ssl::NoRevoke{true})
-        );
-      }
+    if (!Config::Get().sync_options.verify_ssl) {
+      session->SetSslOptions(
+        cpr::Ssl(cpr::ssl::VerifyHost{false}, cpr::ssl::VerifyPeer{false}, cpr::ssl::NoRevoke{true})
+      );
     }
 
     session->SetUserAgent("UnityPlayer/" + headers::unityVersion + " (UnityWebRequest/1.0, libcurl/8.10.1-DEV)");
@@ -2853,11 +2857,19 @@ void HandleEntityGroup(EntityGroup* entity_group)
   }
 }
 
+#if __APPLE__
+void DataContainer_ParseBinaryObject(auto original, void* _this, EntityGroup* group)
+{
+  HandleEntityGroup(group);
+  return original(_this, group);
+}
+#else
 void DataContainer_ParseBinaryObject(auto original, void* _this, EntityGroup* group, bool isPlayerData)
 {
   HandleEntityGroup(group);
   return original(_this, group, isPlayerData);
 }
+#endif
 
 void DataContainer_ParseEntitySlotsData(auto original, void* _this, EntityGroup* group)
 {
@@ -2998,6 +3010,11 @@ void InstallSyncPatches()
     }
   }
 
+#if __APPLE__
+  // 1.000.49105: BuffService.ParseBinaryObject is a 0x18-byte body immediately before HandleResponseData.
+  // Spud's ARM64 absolute jump is larger than that, so detouring it overwrites the next function entry.
+  spdlog::info("Skipping BuffService hook lookup on macOS");
+#else
   if (auto buff_service =
           il2cpp_get_class_helper("Digit.Client.PrimeLib.Runtime", "Digit.PrimeServer.Services", "BuffService");
       !buff_service.isValidHelper()) {
@@ -3009,6 +3026,7 @@ void InstallSyncPatches()
       SPUD_STATIC_DETOUR(ptr, DataContainer_ParseBinaryObject);
     }
   }
+#endif
 
   if (auto inventory_data_container = il2cpp_get_class_helper("Digit.Client.PrimeLib.Runtime",
                                                               "Digit.PrimeServer.Services", "InventoryDataContainer");
